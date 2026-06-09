@@ -1,7 +1,7 @@
+setuptools
 streamlit
 pandas
 finance-datareader
 pykrx
 yfinance
 plotly
-setuptools
