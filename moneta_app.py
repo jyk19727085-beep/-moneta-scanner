@@ -1,32 +1,33 @@
 import streamlit as st
 import requests
-import pandas as pd
 
-st.set_page_config(layout="wide")
-st.title("📊 모네타: 시장 분리 호출 엔진")
+st.title("📊 모네타: 최후의 데이터 해부")
 
 api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
 basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
 
-def fetch_market_data(mkt_id):
-    url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
-    params = {
-        "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
-        "mktId": mkt_id, # STK(코스피), KSQ(코스닥) 분리 호출
-        "trdDd": basDd,
-        "share": "1",
-        "csvxls_is": "false"
-    }
-    res = requests.post(url, headers={"AUTH_KEY": api_key.strip()}, data=params)
-    return res.json()
-
-if st.button("🚀 주식 데이터 정밀 호출"):
-    if not api_key: st.error("키 입력 필수")
+if st.button("🚀 원본 해부 시작"):
+    if not api_key:
+        st.error("API 키를 입력하세요.")
     else:
-        st.write("📡 코스피 데이터 호출 중...")
-        kospi_data = fetch_market_data("STK")
-        st.write("코스피 응답:", kospi_data.get('OutBlock_1', '데이터 없음')[:5])
+        url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
+        params = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
+            "mktId": "STK",
+            "trdDd": basDd,
+            "share": "1",
+            "csvxls_is": "false"
+        }
         
-        st.write("📡 코스닥 데이터 호출 중...")
-        kosdaq_data = fetch_market_data("KSQ")
-        st.write("코스닥 응답:", kosdaq_data.get('OutBlock_1', '데이터 없음')[:5])
+        try:
+            # 1. 원본 응답 요청
+            res = requests.post(url, headers={"AUTH_KEY": api_key.strip()}, data=params)
+            
+            st.write("응답 상태 코드:", res.status_code)
+            
+            # 2. JSON 파싱 전 원본 텍스트 확인 (오류의 핵심)
+            st.text("서버가 보내준 원본 메시지(정확히 확인하세요):")
+            st.code(res.text[:1000]) # 앞부분 1000자 출력
+            
+        except Exception as e:
+            st.error(f"통신 오류: {e}")
