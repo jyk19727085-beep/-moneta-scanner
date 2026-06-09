@@ -1,23 +1,27 @@
 import streamlit as st
+import pandas as pd
 import requests
 
-st.title("🛡️ KRX API 상태 진단 툴")
-api_key = st.text_input("🔑 인증키 입력", type="password")
+st.title("📊 모네타 최후의 스캐너")
+api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
+basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
 
-if st.button("🚀 최종 진단"):
-    # 실제 데이터 운영 서버 주소
+if st.button("🚀 데이터 호출 시작"):
+    # 거래소 API 표준 호출 URL (운영 서버)
     url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
-    # 주식 시세 데이터 호출을 위한 필수 파라미터 (일반적인 형식)
+    
+    # 거래소 시스템이 요구하는 필수 파라미터 규격(표준)
     params = {
-        "mktId": "STK",
-        "trdDd": "20260604",
+        "bld": "dbms/MDC/STAT/standard/MDCSTAT01501", # 코스피 시세용 표준 블록코드
+        "trdDd": basDd,
         "share": "1",
         "csvxls_is": "false"
     }
     
     try:
         res = requests.get(url, headers={"AUTH_KEY": api_key.strip()}, params=params)
-        st.write("응답 상태:", res.status_code)
-        st.write("응답 전문:", res.text)
+        data = res.json()
+        st.write("응답 코드:", res.status_code)
+        st.write("데이터 결과:", data)
     except Exception as e:
-        st.error(f"연결 오류: {e}")
+        st.error(f"오류: {e}")
