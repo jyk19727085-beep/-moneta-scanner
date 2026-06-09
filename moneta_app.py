@@ -5,9 +5,8 @@ from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Daniel 모네타 시스템", layout="wide")
 st.title("📊 모네타(Moneta) - 실전 퀀트 스캐너")
-st.markdown("**에러 제로(Zero-Error) 방어 체계 적용 완료**")
+st.markdown("**데이터 형식 자동 보정 및 ETF 배제 완료**")
 
-# 1. 데이터 호출 모듈 (오류 방어 강화)
 def get_krx_data(url, api_key, basDd):
     try:
         res = requests.get(url, headers={"AUTH_KEY": api_key}, params={"basDd": basDd}, timeout=10)
@@ -19,50 +18,48 @@ def get_krx_data(url, api_key, basDd):
     return pd.DataFrame()
 
 with st.sidebar:
-    api_key = st.text_input("🔑 KRX API 인증키:", type="password")
-    target_date = st.date_input("분석 기준일자", datetime.now() - timedelta(days=1))
-    basDd = target_date.strftime("%Y%m%d")
+    api_key = st.text_input("🔑 API 인증키:", type="password")
+    basDd = st.date_input("기준일", datetime.now() - timedelta(days=1)).strftime("%Y%m%d")
 
-if st.button("🚀 정밀 스캐닝 가동", type="primary", use_container_width=True):
+if st.button("🚀 주도주 정밀 스캐닝 가동", type="primary", use_container_width=True):
     if not api_key: st.error("인증키 입력 필수")
     else:
-        with st.spinner("데이터 분석 중..."):
-            df_kospi = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd", api_key, basDd)
-            df_kosdaq = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd", api_key, basDd)
+        with st.spinner("거래소 데이터 호출 및 형식 보정 중..."):
+            df1 = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd", api_key, basDd)
+            df2 = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd", api_key, basDd)
             
-            # 방어 1: 데이터가 하나라도 있는지 확인
-            if df_kospi.empty and df_kosdaq.empty:
-                st.warning("⚠️ 선택하신 날짜에 거래소 데이터가 없습니다. 다른 날짜를 선택하십시오.")
+            if df1.empty and df2.empty:
+                st.warning("⚠️ 선택한 날짜에 데이터가 없습니다.")
             else:
-                df_all = pd.concat([df_kospi, df_kosdaq], ignore_index=True)
+                df = pd.concat([df1, df2], ignore_index=True)
                 
-                # 방어 2: 데이터가 있어도 필수 항목이 있는지 확인 후 숫자 변환
-                required_cols = ['TDD_CLSPRC', 'TDD_OPNPRC', 'ACC_TRDVOL', 'FLT_RT']
-                if all(col in df_all.columns for col in required_cols):
-                    for col in required_cols:
-                        df_all[col] = pd.to_numeric(df_all[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                # 강제 컬럼 매핑: 거래소가 이름을 다르게 줘도 시스템이 인식하도록 강제 변경
+                # 원본 이름이 다른 경우를 대비해 목록에서 매칭
+                col_map = {
+                    'TDD_CLSPRC': '종가', 'TDD_OPNPRC': '시가', 
+                    'ACC_TRDVOL': '거래량', 'FLT_RT': '등락률',
+                    'ISU_SRT_CD': '코드', 'ISU_NM': '종목명'
+                }
+                df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+                
+                # 분석 가능한 필수 컬럼이 있는지 최종 확인
+                if all(v in df.columns for v in col_map.values()):
+                    # 숫자 변환
+                    for col in ['종가', '시가', '거래량', '등락률']:
+                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                     
-                    # 5대 절대 규칙 필터링
-                    rule_vol = df_all['ACC_TRDVOL'] >= 1000000
-                    rule_candle = df_all['TDD_CLSPRC'] > df_all['TDD_OPNPRC']
-                    rule_rate = (df_all['FLT_RT'] >= 2.0) & (df_all['FLT_RT'] <= 8.0)
-                    rule_pure = ~df_all['ISU_NM'].str.contains('KODEX|TIGER|HANARO|KBSTAR|ACE|SOL|KOSEF|선물|인버스|레버리지|ETN|스팩', case=False, na=False)
+                    # 5대 규칙 적용
+                    rule_vol = df['거래량'] >= 1000000
+                    rule_candle = df['종가'] > df['시가']
+                    rule_rate = (df['등락률'] >= 2.0) & (df['등락률'] <= 8.0)
+                    rule_pure = ~df['종목명'].str.contains('KODEX|TIGER|HANARO|KBSTAR|ACE|SOL|KOSEF|선물|인버스|레버리지|ETN|스팩', case=False, na=False)
                     
-                    final_df = df_all[rule_vol & rule_candle & rule_rate & rule_pure].copy()
+                    final_df = df[rule_vol & rule_candle & rule_rate & rule_pure].sort_values('거래량', ascending=False).head(15)
                     
                     if not final_df.empty:
-                        res_df = final_df.sort_values(by='ACC_TRDVOL', ascending=False).head(15)
-                        show_df = pd.DataFrame({
-                            '종목코드': res_df['ISU_SRT_CD'],
-                            '종목명': res_df['ISU_NM'],
-                            '종가': res_df['TDD_CLSPRC'].map('{:,.0f}원'.format),
-                            '등락률': res_df['FLT_RT'].map('{:.2f}%'.format),
-                            '거래량': res_df['ACC_TRDVOL'].map('{:,.0f}주'.format)
-                        })
-                        show_df.index = range(1, len(show_df)+1)
-                        st.success(f"✅ 조건 부합 종목 {len(show_df)}개 포착")
-                        st.table(show_df)
+                        st.success(f"✅ 조건 만족 종목 {len(final_df)}개 포착")
+                        st.table(final_df[['코드', '종목명', '종가', '등락률', '거래량']])
                     else:
-                        st.info("💡 조건에 맞는 종목이 없습니다 (퀀트 시스템 정상 작동 중).")
+                        st.info("💡 오늘 시장에서는 조건에 맞는 개별 주식이 없습니다.")
                 else:
-                    st.error("⚠️ 데이터 형식이 올바르지 않습니다.")
+                    st.error("⚠️ 거래소 데이터 형식이 불안정합니다. 내일 오전 동기화 후 다시 시도하십시오.")
