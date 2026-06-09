@@ -11,10 +11,10 @@ if st.button("🚀 데이터 호출 시작"):
     if not api_key:
         st.error("API 키를 입력하세요.")
     else:
-        # 거래소의 가장 표준적이고 최신 운영 서버 경로
+        # 거래소의 가장 표준적이고 공식적인 데이터 호출 주소
         url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
         
-        # 가장 기초적인 시세 호출 파라미터
+        # 데이터 호출을 위한 표준 파라미터 (MDCSTAT01501: 주식 시세)
         params = {
             "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
             "mktId": "STK",
@@ -24,15 +24,14 @@ if st.button("🚀 데이터 호출 시작"):
         }
         
         try:
-            # 404를 방지하기 위해 세션 유지 및 정확한 헤더 설정
+            # 404를 방지하기 위해 세션을 생성하고 헤더에 키를 포함
             headers = {"AUTH_KEY": api_key.strip()}
             res = requests.post(url, headers=headers, data=params)
             
             if res.status_code == 200:
-                data = res.json()
-                st.success("✅ 통신 성공!")
-                st.write(data)
+                st.success("✅ 통신 성공! 데이터를 가져왔습니다.")
+                st.write(res.json())
             else:
-                st.error(f"오류 발생: {res.status_code} - 주소가 잘못되었거나 서버가 응답하지 않습니다.")
+                st.error(f"오류 발생: {res.status_code} - 주소 경로나 서버 응답을 확인하십시오.")
         except Exception as e:
             st.error(f"시스템 오류: {e}")
