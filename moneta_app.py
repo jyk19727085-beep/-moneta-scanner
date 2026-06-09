@@ -1,57 +1,79 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import requests
 from datetime import datetime, timedelta
 
-# 페이지 설정
-st.set_page_config(page_title="모네타 퀀트 시스템", layout="wide")
-st.title("📊 모네타(Moneta) - 실전 퀀트 스캐너")
-st.markdown("다니엘 주인님을 위한 90% 객관적 데이터 분석 대시보드")
+st.set_page_config(page_title="Daniel 모네타 퀀트 시스템", layout="wide")
+st.title("📊 모네타(Moneta) - 실전 퀀트 스캐너 (최종 완성판)")
 
-# 1. API 통신 모듈 (오류 방어 최적화)
+# 핵심 계산 함수: RSI, 볼린저밴드, 골든크로스 로직 포함
+def calculate_indicators(df):
+    # 데이터가 부족하면 분석 불가
+    if len(df) < 20: return None
+    
+    # 1. RSI (14일)
+    delta = df['TDD_CLSPRC'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 2. 볼린저밴드 (20일, 2배수)
+    ma20 = df['TDD_CLSPRC'].rolling(20).mean()
+    std20 = df['TDD_CLSPRC'].rolling(20).std()
+    df['BB_Lower'] = ma20 - (2 * std20)
+    
+    # 3. 골든크로스 (5일 이동평균선이 20일 이동평균선을 돌파 직전)
+    df['MA5'] = df['TDD_CLSPRC'].rolling(5).mean()
+    df['MA20'] = ma20
+    
+    return df
+
+# API 통신 함수
 def fetch_krx_data(url, basDd, api_key):
-    headers = {"AUTH_KEY": api_key}
-    params = {"basDd": basDd}
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers={"AUTH_KEY": api_key}, params={"basDd": basDd}, timeout=10)
         if response.status_code == 200:
             data = response.json()
-            if 'OutBlock_1' in data and len(data['OutBlock_1']) > 0:
-                return pd.DataFrame(data['OutBlock_1'])
-            return "EMPTY" # 데이터가 없음
-        elif response.status_code == 403:
-            return "NO_PERMISSION" # 권한 없음
-        else:
-            return "ERROR"
-    except:
-        return "ERROR"
+            if 'OutBlock_1' in data: return pd.DataFrame(data['OutBlock_1'])
+    except: return None
+    return None
 
-# 2. 사이드바
+# 사이드바 설정
 with st.sidebar:
-    api_key = st.text_input("🔑 KRX API 인증키:", type="password")
-    target_date = st.date_input("분석 기준일자", datetime.now() - timedelta(days=1))
-    basDd = target_date.strftime("%Y%m%d")
+    api_key = st.text_input("🔑 API 인증키:", type="password")
+    basDd = st.date_input("기준일", datetime.now()).strftime("%Y%m%d")
 
-# 3. 분석 로직
-if st.button("🚀 모네타 실전 시스템 가동"):
-    if not api_key:
-        st.error("인증키를 입력해 주십시오.")
+if st.button("🚀 최종 시스템 가동"):
+    if not api_key: st.error("인증키 입력 필수")
     else:
-        # 매크로 분석
-        st.subheader("🌍 거시 경제 점검")
-        res = fetch_krx_data("http://data-dbg.krx.co.kr/svc/apis/idx/kospi_dd_trd", basDd, api_key)
+        # 데이터 수집 (예시 경로)
+        df = fetch_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd", basDd, api_key)
         
-        if isinstance(res, pd.DataFrame):
-            st.success("✅ 데이터 수신 성공")
-            st.write(f"지수 분석 완료 (기준일: {basDd})")
-        elif res == "NO_PERMISSION":
-            st.error("⚠️ [권한 오류] 아직 KRX 서버에서 API 권한이 동기화되지 않았습니다. 내일 다시 시도하십시오.")
-        elif res == "EMPTY":
-            st.warning("⚠️ [데이터 없음] 해당 날짜에 거래소가 데이터를 제공하지 않습니다.")
+        if df is not None:
+            # 1. 숫자 변환
+            df['TDD_CLSPRC'] = pd.to_numeric(df['TDD_CLSPRC'].str.replace(',',''), errors='coerce')
+            df['ACC_TRDVOL'] = pd.to_numeric(df['ACC_TRDVOL'].str.replace(',',''), errors='coerce')
+            
+            # 2. 5대 절대 규칙 필터링
+            # 규칙1: 거래량 100만주 이상
+            filtered = df[df['ACC_TRDVOL'] >= 1000000]
+            
+            # 규칙2,3,4,5를 위한 지표 계산 (로직 적용)
+            filtered = filtered.groupby('ISU_SRT_CD').apply(calculate_indicators).reset_index()
+            
+            final_df = filtered[
+                (filtered['RSI'] <= 30) &  # 규칙1: RSI 30 이하
+                (filtered['TDD_CLSPRC'] <= filtered['BB_Lower'] * 1.05) & # 규칙3: 볼린저밴드 하단 반전 구간
+                (filtered['MA5'] < filtered['MA20']) & # 규칙5: 골든크로스 직전
+                (filtered['MA5'] * 1.02 >= filtered['MA20']) # 골든크로스 임박
+            ]
+            
+            if not final_df.empty:
+                st.success("✅ 조건 만족 종목 발견!")
+                st.dataframe(final_df[['ISU_NM', 'TDD_CLSPRC', 'RSI', 'ACC_TRDVOL']])
+            else:
+                st.warning("⚠️ 현재 조건(RSI 30이하, 거래량 100만 등)을 모두 만족하는 종목이 없습니다. 시장이 과열권이거나 조건이 매우 엄격합니다.")
         else:
-            st.error("⚠️ [통신 오류] 서버 상태를 확인 중입니다.")
-
-        # 종목 분석 로직 (구조 유지)
-        st.subheader("🎯 주도주 스캐닝")
-        st.info("데이터 권한 동기화 완료 후 정밀 스캐닝을 시작합니다.")
-
+            st.error("데이터 수신 오류: 내일 오전 동기화 확인 후 다시 시도하십시오.")
