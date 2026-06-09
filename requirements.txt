@@ -3,5 +3,4 @@ pandas
 finance-datareader
 pykrx
 yfinance
-pandas-ta
 plotly
