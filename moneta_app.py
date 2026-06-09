@@ -15,7 +15,8 @@ def get_macro_data(start_date, end_date):
         'WTI 원유 (USD/bbl)': 'CL=F',
         '금 (USD/oz)': 'GC=F',
         '미국 10년물 국채 (%)': '^TNX',
-        '한국 3년물 국채 (%)': 'KR3YT=RR'
+        '한국 3년물 국채 (%)': 'KR3YT=RR',
+        '한국 10년물 국채 (%)': 'KR10YT=RR'  # 국내 장기 채권 지표 추가
     }
     
     data_dict = {}
@@ -23,7 +24,8 @@ def get_macro_data(start_date, end_date):
         try:
             df = yf.download(symbol, start=start_date, end=end_date, progress=False)
             if not df.empty:
-                data_dict[name] = df['Close']
+                # [핵심 수정] 다중 인덱스로 들어오는 데이터를 1차원으로 강제 압축(squeeze)
+                data_dict[name] = df['Close'].squeeze()
         except Exception:
             pass 
     return data_dict
@@ -105,10 +107,18 @@ with tab1:
         for i, (name, series) in enumerate(macro_data.items()):
             with cols[i % 2]:
                 if len(series) > 1:
-                    # 데이터 추출 (Pandas Series 호환성 완벽 대응)
-                    current_val = float(series.iloc[-1])
-                    prev_val = float(series.iloc[-2])
-                    pct_change = ((current_val - prev_val) / prev_val) * 100
+                    # [핵심 수정] 표 형태(Series)로 들어올 경우 순수 숫자(Scalar)만 안전하게 추출하는 방어 로직
+                    val_cur = series.iloc[-1]
+                    val_prv = series.iloc[-2]
+                    
+                    if isinstance(val_cur, pd.Series): val_cur = val_cur.iloc[0]
+                    if isinstance(val_prv, pd.Series): val_prv = val_prv.iloc[0]
+                    
+                    current_val = float(val_cur)
+                    prev_val = float(val_prv)
+                    
+                    # 0으로 나누는 수학적 오류 사전 차단
+                    pct_change = ((current_val - prev_val) / prev_val) * 100 if prev_val != 0 else 0.0
                     
                     # 지표 카드
                     st.metric(label=name, value=f"{current_val:,.2f}", delta=f"{pct_change:.2f}%")
