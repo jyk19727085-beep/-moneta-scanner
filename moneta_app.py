@@ -1,17 +1,25 @@
 import streamlit as st
 import requests
+import pandas as pd
 
-st.title("📊 모네타: 최후의 데이터 해부")
+st.title("📊 모네타: 브라우저 위장 통신 엔진")
 
 api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
 basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
 
-if st.button("🚀 원본 해부 시작"):
+if st.button("🚀 데이터 긁어오기"):
     if not api_key:
-        st.error("API 키를 입력하세요.")
+        st.error("API 키를 입력하십시오.")
     else:
         url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
-        params = {
+        
+        # [핵심] 봇이 아니라 브라우저라고 서버를 속이는 'User-Agent' 설정
+        headers = {
+            "AUTH_KEY": api_key.strip(),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        
+        payload = {
             "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
             "mktId": "STK",
             "trdDd": basDd,
@@ -20,14 +28,14 @@ if st.button("🚀 원본 해부 시작"):
         }
         
         try:
-            # 1. 원본 응답 요청
-            res = requests.post(url, headers={"AUTH_KEY": api_key.strip()}, data=params)
+            res = requests.post(url, headers=headers, data=payload)
             
-            st.write("응답 상태 코드:", res.status_code)
-            
-            # 2. JSON 파싱 전 원본 텍스트 확인 (오류의 핵심)
-            st.text("서버가 보내준 원본 메시지(정확히 확인하세요):")
-            st.code(res.text[:1000]) # 앞부분 1000자 출력
-            
+            if "OutBlock_1" in res.text:
+                data = res.json()
+                st.success("✅ 통신 성공! 데이터 추출 완료")
+                st.dataframe(pd.DataFrame(data['OutBlock_1']))
+            else:
+                st.error("데이터를 가져오는 데 실패했습니다. 서버 응답 전문:")
+                st.text(res.text[:500]) # HTML 코드 등 원인 확인
         except Exception as e:
-            st.error(f"통신 오류: {e}")
+            st.error(f"오류 발생: {e}")
