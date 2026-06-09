@@ -10,7 +10,6 @@ st.set_page_config(page_title="Daniel's Quant Dashboard", layout="wide", initial
 
 # --- 안전한 숫자 추출을 위한 방어 함수 ---
 def extract_scalar(val):
-    """데이터가 어떤 형태로 들어오든 결측치를 방어하고 순수 숫자만 추출"""
     try:
         if isinstance(val, pd.Series): return float(val.iloc[0])
         elif isinstance(val, (list, tuple)): return float(val[0])
@@ -20,7 +19,6 @@ def extract_scalar(val):
 
 # --- 재시도(Retry) 로직이 탑재된 하이브리드 수집 엔진 ---
 def fetch_with_retry(symbol, start_date, end_date, engine='yf', retries=3):
-    """수집 지연을 방어하기 위해 실패 시 최대 3회 재시도하는 끈질긴 엔진"""
     for attempt in range(retries):
         try:
             if engine == 'yf':
@@ -31,14 +29,13 @@ def fetch_with_retry(symbol, start_date, end_date, engine='yf', retries=3):
             if df is not None and not df.empty and len(df) >= 2:
                 return df['Close'].dropna().squeeze()
         except Exception:
-            time.sleep(1) # 차단 회피를 위해 1초 대기 후 재시도
+            time.sleep(1)
     return None
 
 @st.cache_data(ttl=1800)
 def get_macro_data(start_date, end_date):
     data_dict = {}
     
-    # 1. 1차 수집 (야후 파이낸스)
     yf_symbols = {
         '금 (USD/oz)': 'GC=F',
         'WTI 원유 (USD/bbl)': 'CL=F',
@@ -53,7 +50,6 @@ def get_macro_data(start_date, end_date):
         if result is not None:
             data_dict[name] = result
             
-    # 2. 2차 수집 방어망 (FDR) - 1차에서 누락된 경우에만 작동
     fdr_symbols = {
         '미국 10년물 국채 (%)': 'US10YT',
         '미국 2년물 국채 (%)': 'US2YT',
@@ -109,7 +105,28 @@ def apply_technical_analysis(ticker, start_date, end_date):
     except:
         return None
 
-# --- UI 레이아웃 ---
+# --- UI를 그리는 공통 함수 (코드 중복 방지 및 모바일 방어) ---
+def render_macro_card(name, macro_data):
+    if name in macro_data and len(macro_data[name]) >= 2:
+        series = macro_data[name]
+        current_val = extract_scalar(series.iloc[-1])
+        prev_val = extract_scalar(series.iloc[-2])
+        
+        pct_change = ((current_val - prev_val) / prev_val) * 100 if prev_val != 0 else 0.0
+        
+        st.metric(label=name, value=f"{current_val:,.2f}", delta=f"{pct_change:.2f}%")
+        chart_df = pd.DataFrame(series)
+        st.line_chart(chart_df, height=120)
+    else:
+        st.metric(label=name, value="수집 지연", delta="-")
+        st.markdown(
+            "<div style='height: 120px; display: flex; align-items: center; justify-content: center; "
+            "color: gray; font-size: 0.8em; border: 1px dashed #444; border-radius: 5px;'>"
+            "서버 일시 차단(재시도 중)</div>", 
+            unsafe_allow_html=True
+        )
+
+# --- UI 레이아웃 시작 ---
 st.title("📈 Daniel's Quant Dashboard")
 st.markdown("객관적 자금 유입과 입체적 장단기 스프레드를 결합한 시스템")
 
@@ -118,19 +135,16 @@ market_type = st.sidebar.selectbox("스캐닝 시장 선택", ["KOSPI", "KOSDAQ"
 
 tab1, tab2 = st.tabs(["📊 글로벌 거시 및 국채 금리", "🎯 자금유입/모멘텀 스캐닝"])
 
-# --- 탭 1: 거시경제 동향 (주인님 지시 배열 완벽 고정) ---
+# --- 탭 1: 거시경제 동향 ---
 with tab1:
     st.subheader("글로벌 핵심 자산 및 장·단기 국채 스프레드")
     st.markdown("10년물(좌)-2년물(우) 배치를 통해 금리 역전 현상을 즉각 확인합니다.")
     
-    # 💡 [핵심] 주인님께서 지시하신 배열 (금 -> 석유 -> 미10 -> 미2 -> 한10 -> 한2)
-    ordered_keys = [
-        '금 (USD/oz)',           # 1행 좌측
-        'WTI 원유 (USD/bbl)',   # 1행 우측
-        '미국 10년물 국채 (%)', # 2행 좌측
-        '미국 2년물 국채 (%)',  # 2행 우측
-        '한국 10년물 국채 (%)', # 3행 좌측
-        '한국 2년물 국채 (%)'   # 3행 우측
+    # 💡 [핵심] 가로줄(Row) 단위로 묶어서 모바일 환경에서도 절대 순서가 꼬이지 않도록 뼈대 재구축
+    ordered_rows = [
+        ('금 (USD/oz)', 'WTI 원유 (USD/bbl)'),           # 1행
+        ('미국 10년물 국채 (%)', '미국 2년물 국채 (%)'),  # 2행
+        ('한국 10년물 국채 (%)', '한국 2년물 국채 (%)')   # 3행
     ]
     
     today = datetime.today()
@@ -139,29 +153,14 @@ with tab1:
     with st.spinner("다중 우회 엔진을 통해 글로벌 데이터를 수집 중입니다..."):
         macro_data = get_macro_data(macro_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
         
-        cols = st.columns(2)
-        
-        for idx, name in enumerate(ordered_keys):
-            with cols[idx % 2]:
-                if name in macro_data and len(macro_data[name]) >= 2:
-                    series = macro_data[name]
-                    current_val = extract_scalar(series.iloc[-1])
-                    prev_val = extract_scalar(series.iloc[-2])
-                    
-                    pct_change = ((current_val - prev_val) / prev_val) * 100 if prev_val != 0 else 0.0
-                    
-                    st.metric(label=name, value=f"{current_val:,.2f}", delta=f"{pct_change:.2f}%")
-                    chart_df = pd.DataFrame(series)
-                    st.line_chart(chart_df, height=120)
-                else:
-                    # 데이터 통신 지연 시 빈칸으로 무너지지 않도록 방어 UI 표출
-                    st.metric(label=name, value="수집 지연", delta="-")
-                    st.markdown(
-                        "<div style='height: 120px; display: flex; align-items: center; justify-content: center; "
-                        "color: gray; font-size: 0.8em; border: 1px dashed #444; border-radius: 5px;'>"
-                        "서버 일시 차단(IP 재할당 대기중)</div>", 
-                        unsafe_allow_html=True
-                    )
+        # 가로줄(Row) 단위로 화면에 출력 (PC는 좌우, 모바일은 완벽한 상하 순서 보장)
+        for left_item, right_item in ordered_rows:
+            col1, col2 = st.columns(2)
+            with col1:
+                render_macro_card(left_item, macro_data)
+            with col2:
+                render_macro_card(right_item, macro_data)
+            st.write("---") # 각 행을 구분하는 연한 실선 추가 (가독성 향상)
 
 # --- 탭 2: 자금 유입 모멘텀 스캐닝 ---
 with tab2:
