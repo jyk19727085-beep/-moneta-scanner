@@ -1,21 +1,25 @@
 import streamlit as st
-import requests
 import pandas as pd
+import requests
 
-st.title("🛡️ 모네타: 최종 안정화 레이더")
+st.title("📊 모네타: 최후의 브라우저 우회 스캐너")
 
 api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
 basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
 
-if st.button("🚀 데이터 호출 시작"):
+if st.button("🚀 데이터 긁어오기 가동"):
     if not api_key:
-        st.error("API 키를 입력하세요.")
+        st.error("API 키 입력 필수")
     else:
-        # 거래소의 가장 표준적이고 공식적인 데이터 호출 주소
-        url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
+        # 거래소 데이터 마켓의 메인 페이지를 거쳐서 진입하는 우회 경로
+        # 가장 안정적인 웹 브라우저 헤더 설정
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101"
+        }
         
-        # 데이터 호출을 위한 표준 파라미터 (MDCSTAT01501: 주식 시세)
-        params = {
+        # 데이터를 조회하는 표준 폼 데이터
+        payload = {
             "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
             "mktId": "STK",
             "trdDd": basDd,
@@ -24,14 +28,19 @@ if st.button("🚀 데이터 호출 시작"):
         }
         
         try:
-            # 404를 방지하기 위해 세션을 생성하고 헤더에 키를 포함
-            headers = {"AUTH_KEY": api_key.strip()}
-            res = requests.post(url, headers=headers, data=params)
+            # 세션을 만들어 쿠키를 획득한 후 데이터를 조회
+            session = requests.Session()
+            session.get("https://data.krx.co.kr/", headers=headers)
+            
+            # 실제 데이터 호출
+            res = session.post("https://data.krx.co.kr/commbldtop/WhlSvc.ctrl", headers=headers, data=payload)
             
             if res.status_code == 200:
-                st.success("✅ 통신 성공! 데이터를 가져왔습니다.")
-                st.write(res.json())
+                data = res.json()
+                st.success("✅ 통신 대성공!")
+                st.write(data)
             else:
-                st.error(f"오류 발생: {res.status_code} - 주소 경로나 서버 응답을 확인하십시오.")
+                st.error(f"서버가 여전히 404 혹은 거부를 합니다: {res.status_code}")
+                st.text(res.text[:500])
         except Exception as e:
-            st.error(f"시스템 오류: {e}")
+            st.error(f"시스템 예외: {e}")
