@@ -1,35 +1,107 @@
 import streamlit as st
 import pandas as pd
 import requests
+from datetime import datetime
 
-st.set_page_config(layout="wide")
-st.title("📊 모네타 스캐너 (통신 진단 모드)")
+st.set_page_config(page_title="Daniel 모네타 퀀트 시스템", layout="wide")
+st.title("📊 모네타(Moneta) - 주식 & 채권 통합 스캐너")
+st.markdown("---")
 
-api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
-basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
-
-if st.button("🚀 스캐닝 가동"):
-    if not api_key: 
-        st.error("API 키를 입력하세요.")
-    else:
-        # 키 앞뒤의 실수 빈칸(공백) 자동 제거
-        clean_key = api_key.strip()
-        url = "http://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd"
-        
-        try:
-            res = requests.get(url, headers={"AUTH_KEY": clean_key}, params={"basDd": basDd}, timeout=10)
+# 1. 절대 죽지 않는 안전한 데이터 호출 모듈
+def get_krx_data(url, api_key, basDd):
+    try:
+        res = requests.get(url, headers={"AUTH_KEY": api_key.strip()}, params={"basDd": basDd}, timeout=15)
+        if res.status_code == 200:
             data = res.json()
+            if 'OutBlock_1' in data and data['OutBlock_1']:
+                return pd.DataFrame(data['OutBlock_1'])
+    except: pass
+    return pd.DataFrame()
+
+# 2. 사이드바 제어반
+with st.sidebar:
+    st.header("🔑 시스템 제어반")
+    api_key = st.text_input("API 인증키:", type="password")
+    basDd = st.text_input("검색 날짜(YYYYMMDD):", datetime.now().strftime("%Y%m%d"))
+
+# 3. 메인 엔진 가동
+if st.button("🚀 통합 스캐닝 가동", type="primary", use_container_width=True):
+    if not api_key: 
+        st.error("API 키를 입력해 주십시오.")
+    else:
+        st.info("📡 한국거래소(KRX) 서버와 실시간 통신 중입니다...")
+        
+        # ==========================================
+        # 🟢 [섹션 1] 채권 시장 동향 (국고채 + 일반채권)
+        # ==========================================
+        st.subheader("🌐 채권 시장 스캐닝 (안전 자산 모니터링)")
+        
+        bond_ktb = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/bnd/ktb_dd_trd", api_key, basDd)
+        bond_gen = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/bnd/gen_bnd_dd_trd", api_key, basDd)
+        
+        bond_df = pd.concat([bond_ktb, bond_gen], ignore_index=True) if not (bond_ktb.empty and bond_gen.empty) else pd.DataFrame()
+        
+        if not bond_df.empty:
+            # 채권 한글 이름표(컬럼) 강제 맵핑
+            bond_cols = {'ISU_NM': '채권명', 'TDD_CLSPRC': '종가(원)', 'YLD_FOR_OPNPRC': '수익률(%)', 'ACC_TRDVOL': '거래량'}
+            bond_df = bond_df.rename(columns={k:v for k,v in bond_cols.items() if k in bond_df.columns})
             
-            # 거래소에서 에러 메시지를 보냈는지 최우선 확인
-            if 'error_msg' in data:
-                st.error(f"🛑 한국거래소(KRX) 서버 응답: {data['error_msg']}")
-                st.warning("💡 조치 방법: KRX Data Marketplace 홈페이지 로그인 -> 마이페이지 -> API 키 상태 및 시세 데이터 신청 여부 확인")
-            elif 'OutBlock_1' in data and data['OutBlock_1']:
-                st.success("✅ 통신 대성공! 인증키가 유효합니다. 데이터를 불러옵니다.")
-                df = pd.DataFrame(data['OutBlock_1'])
-                st.dataframe(df.head(10))
-            else:
-                st.info("통신은 정상이나 해당 날짜에 데이터가 없습니다.")
+            # 거래량 순으로 정렬하여 상위 5개만 표출
+            if '거래량' in bond_df.columns:
+                bond_df['거래량'] = pd.to_numeric(bond_df['거래량'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                display_bond = bond_df.sort_values('거래량', ascending=False).head(5)
                 
-        except Exception as e:
-            st.error(f"서버 접속 자체 실패: {e}")
+                # 표의 왼쪽 흉한 숫자(인덱스)를 1,2,3위로 깔끔하게 정리
+                display_bond.index = range(1, len(display_bond) + 1)
+                st.success("✅ 채권 데이터 수신 및 정제 완료")
+                
+                # 필요한 한글 컬럼만 쏙 뽑아서 표출
+                show_bond_cols = [c for c in ['채권명', '종가(원)', '수익률(%)', '거래량'] if c in display_bond.columns]
+                st.table(display_bond[show_bond_cols])
+        else:
+            st.warning("💡 해당 날짜에 수신된 채권 데이터가 없습니다.")
+
+        st.markdown("---")
+
+        # ==========================================
+        # 🔴 [섹션 2] 개별 주식 주도주 스캐닝 (5대 절대 규칙)
+        # ==========================================
+        st.subheader("🎯 개별 주식 주도주 스캐너 (퀀트 필터링)")
+        
+        df1 = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/stk_bydd_trd", api_key, basDd)
+        df2 = get_krx_data("http://data-dbg.krx.co.kr/svc/apis/sto/ksq_bydd_trd", api_key, basDd)
+        
+        stock_df = pd.concat([df1, df2], ignore_index=True) if not (df1.empty and df2.empty) else pd.DataFrame()
+        
+        if not stock_df.empty:
+            # 주식 한글 이름표(컬럼) 강제 맵핑
+            stock_cols = {'ISU_SRT_CD': '종목코드', 'ISU_NM': '종목명', 'TDD_CLSPRC': '당일종가', 'TDD_OPNPRC': '당일시가', 'ACC_TRDVOL': '당일거래량', 'FLT_RT': '등락률(%)'}
+            stock_df = stock_df.rename(columns={k:v for k,v in stock_cols.items() if k in stock_df.columns})
+            
+            # 숫자형 변환 (에러 원천 차단)
+            for c in ['당일종가', '당일시가', '당일거래량', '등락률(%)']:
+                if c in stock_df.columns:
+                    stock_df[c] = pd.to_numeric(stock_df[c].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            
+            # Daniel의 5대 필터링 룰 적용
+            if '당일거래량' in stock_df.columns:
+                res = stock_df[
+                    (stock_df['당일거래량'] >= 1000000) & 
+                    (stock_df['당일종가'] > stock_df['당일시가']) & 
+                    (stock_df['등락률(%)'].between(2.0, 8.0)) & 
+                    (~stock_df['종목명'].str.contains('KODEX|TIGER|HANARO|KBSTAR|ACE|SOL|KOSEF|레버리지|인버스|ETN|스팩', case=False, na=False))
+                ]
+                
+                if not res.empty:
+                    res = res.sort_values('당일거래량', ascending=False).head(15) # 상위 15개 추출
+                    res.index = range(1, len(res) + 1) # 깔끔한 순위 인덱스
+                    
+                    st.success(f"✅ 퀀트 필터 통과! 시장 주도주 {len(res)}개 포착 완료")
+                    
+                    # 보여줄 한글 컬럼만 선택
+                    show_stock_cols = [c for c in ['종목코드', '종목명', '당일종가', '등락률(%)', '당일거래량'] if c in res.columns]
+                    st.dataframe(res[show_stock_cols], use_container_width=True)
+                else:
+                    st.info("💡 오늘 시장에서는 주인님의 '엄격한 기준(100만주 이상+양봉+ETF제외)'을 완벽히 충족하는 주식이 없습니다.")
+        else:
+            st.error("⚠️ 거래소가 주식 데이터를 반환하지 않았습니다.")
