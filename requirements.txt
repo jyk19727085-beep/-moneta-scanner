@@ -4,3 +4,4 @@ finance-datareader
 pykrx
 yfinance
 plotly
+setuptools
