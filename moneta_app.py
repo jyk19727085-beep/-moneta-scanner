@@ -2,50 +2,37 @@ import streamlit as st
 import requests
 import pandas as pd
 
-st.title("📊 모네타: 최후의 브라우저 모방 스캐너")
+st.title("🛡️ 모네타: 최종 안정화 레이더")
 
 api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
 basDd = st.sidebar.text_input("날짜(YYYYMMDD)", "20260604")
 
-if st.button("🚀 데이터 강제 호출"):
-    # 1. 세션 생성 (브라우저 쿠키를 유지하는 '사람'처럼 행동)
-    session = requests.Session()
-    url_base = "http://data.krx.co.kr/"
-    url_data = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
-    
-    # 2. 헤더 설정 (사람인 것처럼 위장)
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer": "http://data.krx.co.kr/contents/MDC/MDI/mdiLoader/index.cmd?menuId=MDC0201020101"
-    }
-    
-    # 3. 데이터 요청 규격 (가장 정확한 형태)
-    payload = {
-        "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
-        "mktId": "STK",
-        "trdDd": basDd,
-        "share": "1",
-        "csvxls_is": "false"
-    }
-    
-    try:
-        # 인증키 헤더 추가
-        headers["AUTH_KEY"] = api_key.strip()
+if st.button("🚀 데이터 호출 시작"):
+    if not api_key:
+        st.error("API 키를 입력하세요.")
+    else:
+        # 거래소의 가장 표준적이고 최신 운영 서버 경로
+        url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
         
-        # 호출
-        res = session.post(url_data, headers=headers, data=payload)
+        # 가장 기초적인 시세 호출 파라미터
+        params = {
+            "bld": "dbms/MDC/STAT/standard/MDCSTAT01501",
+            "mktId": "STK",
+            "trdDd": basDd,
+            "share": "1",
+            "csvxls_is": "false"
+        }
         
-        st.write("응답 코드:", res.status_code)
-        
-        if res.status_code == 200:
-            data = res.json()
-            if 'OutBlock_1' in data:
-                st.success("✅ 데이터 확보 완료!")
-                st.dataframe(pd.DataFrame(data['OutBlock_1']))
-            else:
-                st.error("데이터 없음:")
+        try:
+            # 404를 방지하기 위해 세션 유지 및 정확한 헤더 설정
+            headers = {"AUTH_KEY": api_key.strip()}
+            res = requests.post(url, headers=headers, data=params)
+            
+            if res.status_code == 200:
+                data = res.json()
+                st.success("✅ 통신 성공!")
                 st.write(data)
-        else:
-            st.error(f"서버 거부 (코드: {res.status_code})")
-    except Exception as e:
-        st.error(f"시스템 예외: {e}")
+            else:
+                st.error(f"오류 발생: {res.status_code} - 주소가 잘못되었거나 서버가 응답하지 않습니다.")
+        except Exception as e:
+            st.error(f"시스템 오류: {e}")
