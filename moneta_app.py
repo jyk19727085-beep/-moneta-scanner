@@ -1,31 +1,53 @@
 import streamlit as st
 import pandas as pd
+import requests
+from datetime import datetime
 
-st.set_page_config(page_title="모네타 퀀트 분석기", layout="wide")
-st.title("📊 모네타 퀀트 분석 대시보드")
+st.set_page_config(page_title="모네타 주식 스캐너", layout="wide")
+st.title("📈 모네타: 주식 전용 퀀트 레이더")
 
-uploaded_file = st.file_uploader("KRX 엑셀/CSV 파일을 업로드하세요", type=['csv', 'xlsx'])
+# API 정보 입력
+api_key = st.sidebar.text_input("🔑 API 인증키", type="password")
+basDd = st.sidebar.text_input("날짜(YYYYMMDD)", datetime.now().strftime("%Y%m%d"))
 
-if uploaded_file is not None:
-    # 1. 데이터 로드
-    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    
-    st.success("✅ 데이터 로드 성공!")
-    
-    # 2. 5대 퀀트 필터링 (주인님의 핵심 지침 적용)
-    # 거래량 100만주 이상, 양봉, 등락률 2~8% 등 필터링 로직
-    # (실제 컬럼명에 맞춰 조정이 필요할 수 있습니다)
-    
-    filtered_df = df[
-        (df['거래량'] >= 1000000) & 
-        (df['종가'] > df['시가']) & 
-        (df['등락률'].between(2.0, 8.0))
-    ]
-    
-    st.subheader("🎯 퀀트 필터링 결과")
-    st.dataframe(filtered_df)
-    
-    st.info("분석 완료! 위 데이터를 바탕으로 추가적인 상관계수 분석이나 섹터별 매수를 진행할까요?")
+def fetch_stock_data(mkt_id):
+    """채권을 제외하고 주식 시장(코스피, 코스닥) 데이터만 호출"""
+    url = "http://data.krx.co.kr/commbldtop/WhlSvc.ctrl"
+    # 주식 시세 블록코드
+    params = {
+        "bld": "dbms/MDC/STAT/standard/MDCSTAT01501", 
+        "mktId": mkt_id, # STK: 코스피, KSQ: 코스닥
+        "trdDd": basDd,
+        "share": "1",
+        "csvxls_is": "false"
+    }
+    headers = {"AUTH_KEY": api_key.strip()}
+    res = requests.post(url, headers=headers, data=params)
+    return res.json()
 
-else:
-    st.warning("분석할 데이터를 업로드해 주십시오.")
+if st.button("🚀 주식 전용 데이터 호출"):
+    if not api_key:
+        st.error("인증키를 입력하세요.")
+    else:
+        st.write("📡 주식 데이터 호출 중...")
+        try:
+            # 코스피와 코스닥 데이터만 가져오기 (채권 제외)
+            kospi_json = fetch_stock_data("STK")
+            kosdaq_json = fetch_stock_data("KSQ")
+            
+            # DataFrame 합치기
+            df_kospi = pd.DataFrame(kospi_json.get('OutBlock_1', []))
+            df_kosdaq = pd.DataFrame(kosdaq_json.get('OutBlock_1', []))
+            final_df = pd.concat([df_kospi, df_kosdaq], ignore_index=True)
+            
+            st.success(f"✅ 주식 시장 데이터 수집 완료! (총 {len(final_df)} 종목)")
+            
+            # 퀀트 필터링 적용 (거래량 50만주 이상 등)
+            final_df['ACC_TRDVOL'] = pd.to_numeric(final_df['ACC_TRDVOL'].str.replace(',', ''), errors='coerce')
+            result = final_df[final_df['ACC_TRDVOL'] > 500000]
+            
+            st.dataframe(result[['ISU_NM', 'TDD_CLSPRC', 'FLT_RT', 'ACC_TRDVOL']])
+            
+        except Exception as e:
+            st.error(f"데이터 호출 중 오류가 발생했습니다: {e}")
+            st.info("※ 오류가 계속되면, KRX 사이트에서 해당 데이터를 엑셀로 저장 후 파일을 직접 업로드해 주십시오.")
