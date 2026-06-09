@@ -7,31 +7,61 @@ from datetime import datetime, timedelta
 # --- 페이지 설정 ---
 st.set_page_config(page_title="Daniel's Quant Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-# --- 캐싱을 통한 최적화 (거시 지표) ---
-# 실시간성을 높이기 위해 캐시 유지 시간을 30분(1800초)으로 단축
+# --- 안전한 숫자 추출을 위한 방어 함수 ---
+def extract_scalar(val):
+    """데이터가 Series, List 등 어떤 형태로 들어오든 순수 숫자만 추출"""
+    if isinstance(val, pd.Series):
+        return float(val.iloc[0])
+    elif isinstance(val, (list, tuple)):
+        return float(val[0])
+    else:
+        return float(val)
+
+# --- 캐싱을 통한 최적화 (거시 지표 하이브리드 스캐닝) ---
 @st.cache_data(ttl=1800)
 def get_macro_data(start_date, end_date):
-    """거시경제 지표 데이터를 안정적으로 가져오는 함수"""
-    # 미국 및 한국의 장/단기 국채 지표 완벽 반영
-    macro_symbols = {
-        'WTI 원유 (USD/bbl)': 'CL=F',
-        '금 (USD/oz)': 'GC=F',
-        '미국 2년물 국채 (%)': '^US2Y',     # 미 단기 금리 (유동성 민감)
-        '미국 10년물 국채 (%)': '^TNX',      # 미 장기 금리 (경기 전망)
-        '한국 2년물 국채 (%)': 'KR2YT=RR',   # 한 단기 금리 (야후 지원 유동적)
-        '한국 3년물 국채 (%)': 'KR3YT=RR',   # 한 단기 벤치마크
-        '한국 10년물 국채 (%)': 'KR10YT=RR'  # 한 장기 벤치마크
-    }
-    
+    """원자재는 YF, 채권은 FDR을 사용하는 하이브리드 수집 엔진"""
     data_dict = {}
-    for name, symbol in macro_symbols.items():
+    
+    yf_symbols = {
+        'WTI 원유 (USD/bbl)': 'CL=F',
+        '금 (USD/oz)': 'GC=F'
+    }
+    for name, symbol in yf_symbols.items():
         try:
             df = yf.download(symbol, start=start_date, end=end_date, progress=False)
             if not df.empty:
-                # 다중 인덱스로 들어오는 데이터를 1차원으로 강제 압축(squeeze)하여 에러 영구 차단
                 data_dict[name] = df['Close'].squeeze()
         except Exception:
-            pass 
+            pass
+
+    fdr_bonds = {
+        '미국 10년물 국채 (%)': 'US10YT',
+        '미국 2년물 국채 (%)': 'US2YT',
+        '한국 10년물 국채 (%)': 'KR10YT',
+        '한국 2년물 국채 (%)': 'KR2YT',
+        '한국 3년물 국채 (%)': 'KR3YT'
+    }
+    
+    for name, symbol in fdr_bonds.items():
+        try:
+            df = fdr.DataReader(symbol, start_date, end_date)
+            if not df.empty:
+                data_dict[name] = df['Close'].squeeze()
+        except Exception:
+            fallback_symbols = {
+                '미국 10년물 국채 (%)': '^TNX',
+                '한국 3년물 국채 (%)': 'KR3YT=RR',
+                '한국 10년물 국채 (%)': 'KR10YT=RR'
+            }
+            if name in fallback_symbols:
+                try:
+                    df_fb = yf.download(fallback_symbols[name], start=start_date, end=end_date, progress=False)
+                    if not df_fb.empty:
+                        data_dict[name] = df_fb['Close'].squeeze()
+                except Exception:
+                    pass
+                    
     return data_dict
 
 # --- 수급(거래대금) 기반 모멘텀 실시간/당일 마감 스캐닝 ---
@@ -39,14 +69,10 @@ def get_macro_data(start_date, end_date):
 def get_momentum_stocks(market="KOSPI", top_n=15):
     """당일(실시간) 거래대금 및 상승률 기반 주도주 스캐닝"""
     try:
-        # 네이버 금융 실시간 시세 보드 기반 데이터 스크래핑 (데이터 지연 없음)
         df_list = fdr.StockListing(market)
-        
-        # 조건 1: 상승 종목 (ChagesRatio > 0)
-        # 조건 2: 당일 거래대금(Amount) 기준 내림차순 정렬 (자금 유입 증거)
         df_up = df_list[df_list['ChagesRatio'] > 0].sort_values('Amount', ascending=False).head(top_n)
         return df_up
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 # --- 기술적 분석 엔진 (Pure Pandas) ---
@@ -57,7 +83,6 @@ def apply_technical_analysis(ticker, start_date, end_date):
         df = fdr.DataReader(ticker, start_date, end_date)
         if len(df) < 20: return None
             
-        # RSI (14)
         delta = df['Close'].diff()
         up = delta.clip(lower=0)
         down = -1 * delta.clip(upper=0)
@@ -66,7 +91,6 @@ def apply_technical_analysis(ticker, start_date, end_date):
         rs = ema_up / ema_down
         df['RSI_14'] = 100 - (100 / (1 + rs))
 
-        # 볼린저 밴드 (20, 2)
         df['BBM'] = df['Close'].rolling(window=20).mean()
         std = df['Close'].rolling(window=20).std()
         df['BBU'] = df['BBM'] + (std * 2)
@@ -84,51 +108,60 @@ def apply_technical_analysis(ticker, start_date, end_date):
 
 # --- UI 레이아웃 ---
 st.title("📈 Daniel's Quant Dashboard")
-st.markdown("객관적 자금 유입(실시간/당일)과 기술적 분석을 결합한 프로페셔널 퀀트 시스템")
+st.markdown("객관적 자금 유입(실시간/당일)과 입체적 거시 분석을 결합한 퀀트 시스템")
 
-# 사이드바
 st.sidebar.header("⚙️ 스캐닝 설정")
 market_type = st.sidebar.selectbox("스캐닝 시장 선택", ["KOSPI", "KOSDAQ"])
 
-tab1, tab2 = st.tabs(["📊 거시(Macro) 동향", "🎯 자금유입/모멘텀 스캐닝"])
+tab1, tab2 = st.tabs(["📊 글로벌 장·단기 금리 및 거시", "🎯 자금유입/모멘텀 스캐닝"])
 
-# --- 탭 1: 거시경제 동향 ---
+# --- 탭 1: 거시경제 동향 (장단기 스프레드 비교 최적화) ---
 with tab1:
     st.subheader("글로벌 핵심 자산 및 장·단기 국채 금리")
+    st.markdown("미국과 한국의 10년물(좌)-2년물(우) 스프레드를 직관적으로 비교합니다.")
     today = datetime.today()
     macro_start = today - timedelta(days=180) 
-    macro_data = get_macro_data(macro_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
     
-    if macro_data:
-        cols = st.columns(2)
+    with st.spinner("글로벌 채권 및 원자재 데이터를 동기화 중입니다..."):
+        macro_data = get_macro_data(macro_start.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"))
         
-        for i, (name, series) in enumerate(macro_data.items()):
-            with cols[i % 2]:
-                if len(series) > 1:
-                    # 표 형태(Series)로 들어올 경우 순수 숫자(Scalar)만 안전하게 추출
-                    val_cur = series.iloc[-1]
-                    val_prv = series.iloc[-2]
-                    
-                    if isinstance(val_cur, pd.Series): val_cur = val_cur.iloc[0]
-                    if isinstance(val_prv, pd.Series): val_prv = val_prv.iloc[0]
-                    
-                    current_val = float(val_cur)
-                    prev_val = float(val_prv)
-                    
-                    # 수학적 오류 사전 차단
-                    pct_change = ((current_val - prev_val) / prev_val) * 100 if prev_val != 0 else 0.0
-                    
-                    st.metric(label=name, value=f"{current_val:,.2f}", delta=f"{pct_change:.2f}%")
-                    
-                    chart_df = pd.DataFrame(series)
-                    st.line_chart(chart_df, height=150)
-    else:
-        st.info("데이터를 수집 중입니다. (서버 상태에 따라 수 초 소요될 수 있습니다)")
+        if macro_data:
+            # 💡 [핵심] 주인님께서 지시하신 직관적 표출 순서 강제 고정
+            ordered_keys = [
+                'WTI 원유 (USD/bbl)',
+                '금 (USD/oz)',
+                '미국 10년물 국채 (%)', # 2행 좌측
+                '미국 2년물 국채 (%)',  # 2행 우측 (직관적 비교)
+                '한국 10년물 국채 (%)', # 3행 좌측
+                '한국 2년물 국채 (%)',  # 3행 우측 (직관적 비교)
+                '한국 3년물 국채 (%)'   # 4행 좌측 (벤치마크)
+            ]
+            
+            cols = st.columns(2)
+            
+            # 고정된 순서대로 화면에 렌더링
+            current_col_idx = 0
+            for name in ordered_keys:
+                if name in macro_data and len(macro_data[name]) > 1:
+                    series = macro_data[name]
+                    with cols[current_col_idx % 2]:
+                        current_val = extract_scalar(series.iloc[-1])
+                        prev_val = extract_scalar(series.iloc[-2])
+                        
+                        pct_change = ((current_val - prev_val) / prev_val) * 100 if prev_val != 0 else 0.0
+                        
+                        st.metric(label=name, value=f"{current_val:,.2f}", delta=f"{pct_change:.2f}%")
+                        
+                        chart_df = pd.DataFrame(series)
+                        st.line_chart(chart_df, height=150)
+                    current_col_idx += 1
+        else:
+            st.info("현재 시장 데이터를 수집 중입니다. (주말/휴일일 경우 다소 지연될 수 있습니다)")
 
 # --- 탭 2: 자금 유입 모멘텀 스캐닝 ---
 with tab2:
     st.subheader(f"🔍 {market_type} 메이저 자금 유입 스캐닝")
-    st.markdown("당일 **거래대금 폭발** 및 **상승 모멘텀**이 발생한 주도주를 포착합니다. (실시간/당일 마감 완벽 반영)")
+    st.markdown("당일 **거래대금 폭발** 및 **상승 모멘텀**이 발생한 주도주를 포착합니다. (실시간 완벽 반영)")
     
     if st.button("🚀 정밀 스캐닝 시작", type="primary", use_container_width=True):
         with st.spinner(f"{market_type} 시장의 자금 흐름과 기술적 지표를 분석 중입니다..."):
@@ -176,4 +209,4 @@ with tab2:
                         final_df.style.map(lambda x: 'color: #ff4b4b' if '🔴' in str(x) else ('color: #2ca02c' if '🟢' in str(x) else ''), subset=['차트위치']),
                         use_container_width=True,
                         hide_index=True
-                    )
+    )
